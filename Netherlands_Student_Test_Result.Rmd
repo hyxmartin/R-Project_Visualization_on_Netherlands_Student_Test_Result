@@ -1,0 +1,373 @@
+---
+title: "Netherlands Student Test Result"
+author: "Yuxiang Hu"
+output:
+  html_document:
+    fig_height: 5
+    fig_width: 5
+    toc: yes
+    toc_depth: 5
+    theme: sandstone
+  pdf_document:
+    toc: yes
+---
+
+# Introduction
+## Data Set
+
+The data set `nlschools` (in the `MASS` library, use `data(nlschools, package = "MASS")` to load in the data) contains the following records for 2287 students in the Netherlands.
+  Snijders and Bosker (1999) use as a running example a study of 2287 eighth-grade pupils (aged about 11) in 132 classes in 131 schools in the Netherlands. Only the variables used in our examples are supplied.
+
+* `lang`: their test score on a language exam
+* `IQ`: their verbal IQ
+* `class`: the ID number for their classroom
+* `GS`: the number of students in each class
+* `SES`: the socio-economic status of their family
+* `COMB`: was the student in a multi-grade class? (0=no, 1=yes)
+
+## Task and steps
+
+The task is to explore and describe this data set. You should use both models and visualization. You should use your judgement as to what are the most important aspects of the data to highlight; however, the following questions are of particular interest:
+
+1. Are there descrepancies in `IQ` or `SES` in the different classes, or when grouping by multi-grade vs non-multi-grade classes?
+
+For this question, we will firstly generate class group to better server the analysis. And then use Quantile plot and QQ plot to evaluate each class group versus pooled data and see if descrepencies exist on IQ, SES, respectively. Next, we will use the same strategy to evalute whether multi-grade will affect IQ and SES.
+
+2. When did students perform better or worse on the language exam? Describe which variables had the most important effects. 
+
+In this section, we will evaluate effect of individual variables on language test scores. Cross validation is used to look for the best degree of freedom to build linear model. For one thing, the analysis will be able to tell which variables have impact on language score. On the other hand, I will be able to tell how these variables and what trend is the effect. We will use forward/backward stepwise linear regression to validate our findings in the next question as well.
+
+3. Do you think there are interactions in the effects of the variables on the language exam score? Speculate as to the cause of any such effects that you think should be included.
+
+Firsly, we will use forward/backward stepwise linear regression to validate our find in question 2 on what are the important variables. Then we can use ^2 on variables to run linear regression to get interactions. Then use the Coplots to check if our finds are visiable in the plot on these interactions. Meanwhile, interactions that are not presented in the linear model will be plot as well to confirm no interactions exist between other variables.
+
+We will summarize findings at the end section.
+
+# Analysis
+## Data clean up
+Load some libraries that will be used in the report.
+```{r message=FALSE, fig.width=8, fig.height=5, dpi=100, fig.align='center'}
+library(plyr)
+library(dplyr)
+library(ggplot2)
+library(reshape2)
+library(MASS)
+library(knitr)
+library(broom)
+library(splines)
+library(boot)
+library(ISLR)
+```
+
+Checking if there is any missing values in the dataset
+```{r fig.width=8, fig.height=5, dpi=100, fig.align='center'}
+kable(sapply(nlschools, function(x) sum(is.na(x))), col.names = c('count of missing'))
+```
+
+No NA values in any of columns
+
+## Are there descrepancies in `IQ` or `SES` in the different classes, or when grouping by multi-grade vs non-multi-grade classes?
+
+Group class ID into 10 groups to avoid analyzing individual classes.
+```{r fig.width=8, fig.height=5, dpi=100, fig.align='center'}
+# prepare distinct list of class
+class.group <- data.frame(class = distinct(nlschools, class))
+# assign 10 group
+class.group <- mutate(class.group, class.group = ntile(class.group$class, 10))
+# join with orginal data set
+nlschools.grouped <- inner_join(nlschools, class.group, by = "class")
+# get pooled data for IQ
+IQ.no.groups <- subset(nlschools.grouped, select = "IQ")
+# get pooled data for SES
+SES.no.groups <- subset(nlschools.grouped, select = "SES")
+```
+
+### Descrepancies in `IQ` by classes
+
+Quantile plot for each class group with pooled quantile
+```{r fig.width=8, fig.height=5, dpi=100, fig.align='center'}
+# plot Quantile plot for each 
+ggplot(data = nlschools.grouped, mapping = aes(sample = IQ)) +
+  stat_qq(distribution = qunif, size=1) +
+  facet_wrap("class.group", nrow = 2) +
+  stat_qq(data = IQ.no.groups, mapping = aes(sample = IQ), 
+          distribution = qunif, geom = "line", color = "red") +
+  labs(x = 'Quantiles', y = 'IQ', title = 'Quantile Plot \n(IQ for each class group vs pooled)')
+```
+
+Based on the Quantile plot, there are descrepancies in IQ in different classes. Next, we will use QQ plot to check again.
+
+Prepare find.QQ function to finds quantiles
+```{r fig.width=8, fig.height=5, dpi=100, fig.align='center'}
+Find.QQ <- function(data, col.name, pooled.data){
+  n.pts = min(length(data[,col.name]), length(pooled.data))
+  probs = seq(from = 0, to = 1, length.out = n.pts)
+  q1 = quantile(data[ , col.name], probs = probs)
+  q2 = quantile(pooled.data, probs = probs)
+  return(data.frame(group.data = q1, pooled.data = q2, quantil = probs))
+}
+```
+
+Plot the QQ plot for each class group with pooled quantile
+```{r fig.width=8, fig.height=5, dpi=100, fig.align='center'}
+IQ.many.QQplots <- ddply(nlschools.grouped,'class.group', 
+                     Find.QQ, col.name = 'IQ', pooled.data =  IQ.no.groups$IQ)
+
+# QQ plot
+ggplot(data = IQ.many.QQplots, mapping = aes(x = pooled.data, y = group.data)) +
+  geom_point(size=1) +
+  facet_wrap('class.group', nrow = 2) +
+  labs(x = "All IQ", y = "IQ for Each Class Group", 
+       title = "QQ Plots, Class group vs pooled data") +
+  geom_abline(slope = 1, color = "red")
+```
+
+The QQ plot reveals the IQ discripency across classes again. The verbal IQ of students varies across classes.
+
+### Descrepancies in `SES` by classes
+
+Quantile plot for each class group with pooled quantile
+```{r fig.width=8, fig.height=5, dpi=100, fig.align='center'}
+# plot Quantile plot for each 
+ggplot(data = nlschools.grouped, mapping = aes(sample = SES)) +
+  stat_qq(distribution = qunif, size=1) +
+  facet_wrap("class.group", nrow = 2) +
+  stat_qq(data = SES.no.groups, mapping = aes(sample = SES), 
+          distribution = qunif, geom = "line", color = "red") +
+  labs(x = 'Quantiles', y = 'SES', title = 'Quantile Plot \n(SES for each class group vs pooled)')
+```
+
+Based on the Quantile plot, the descrepancies is obvirous in SES in different classes. Likewise, we will use QQ plot to check again.
+
+Plot the QQ plot for each class group with pooled quantile
+```{r fig.width=8, fig.height=5, dpi=100, fig.align='center'}
+SES.many.QQplots <- ddply(nlschools.grouped,'class.group', 
+                     Find.QQ, col.name = 'SES', pooled.data =  SES.no.groups$SES)
+
+# QQ plot
+ggplot(data = SES.many.QQplots, mapping = aes(x = pooled.data, y = group.data)) +
+  geom_point(size=1) +
+  facet_wrap('class.group', nrow = 2) +
+  labs(x = "All SES", y = "SES for Each Class Group", 
+       title = "QQ Plots, Class group vs pooled data") +
+  geom_abline(slope = 1, color = "red")
+```
+
+Again, the QQ plot reveals the SES discripency across classes. The discripency here is much more significant than in IQ. The socio-economic status of their family varies across classes.
+
+### Descrepancies in `IQ` by whether in multi-grade class
+
+Quantile plot for each class group with pooled quantile
+```{r fig.width=8, fig.height=5, dpi=100, fig.align='center'}
+# Quantile Plot on IQ
+ggplot(data = nlschools.grouped, mapping = aes(sample = IQ, color = COMB)) +
+  stat_qq(distribution = 'qunif') +
+  labs(x = 'Quantiles', y = 'IQ',
+       color = 'COMB',
+       title = 'Quantile Plot, IQ by Whether in multi-grade class')
+
+```
+Plot the QQ plot for each class group with pooled quantile
+```{r fig.width=8, fig.height=5, dpi=100, fig.align='center'}
+# QQ Plot
+# qqplot() makes QQ plot from two categories
+with(nlschools.grouped, 
+     qqplot(x = IQ[ COMB == 1], y = IQ[ COMB == 0], main='QQ plot, IQ by whether in multi-grade class', xlab="in multi-grade", ylab="not in multi-grade"))
+# abline() adds a reference line, with y intercept 0 and slope 1
+abline(0,1)
+```
+
+According to the Quantile plot and QQ Plot, students that are not in multi-grade have higher IQ.
+
+### Descrepancies in `SES` by whether in multi-grade class
+
+Quantile plot for comb with pooled quantile
+```{r fig.width=8, fig.height=5, dpi=100, fig.align='center'}
+# Quantile Plot on IQ
+ggplot(data = nlschools.grouped, mapping = aes(sample = SES, color = COMB)) +
+  stat_qq(distribution = 'qunif') +
+  labs(x = 'Quantiles', y = 'SES',
+       color = 'COMB',
+       title = 'Quantile Plot, SES by Whether in multi-grade class')
+
+```
+Plot the QQ plot for comb with pooled quantile
+```{r fig.width=8, fig.height=5, dpi=100, fig.align='center'}
+# QQ Plot
+# qqplot() makes QQ plot from two categories
+with(nlschools.grouped, 
+     qqplot(x = SES[ COMB == 1], y = SES[ COMB == 0], main='QQ plot, SES by whether in multi-grade class', xlab="in multi-grade", ylab="not in multi-grade"))
+# abline() adds a reference line, with y intercept 0 and slope 1
+abline(0,1)
+```
+
+According to the Quantile plot and QQ Plot, we obtain similar conclusion as student IQ. Students that are not in multi-grade have higher social-economic status of pupil's family.
+
+## When did students perform better or worse on the language exam? Describe which variables had the most important effects. 
+
+Firstly, load cross validation function 
+```{r message=FALSE,,fig.width=8, fig.height=5, dpi=100, fig.align='center'}
+glm.cv.loop = function(data, formula.text, DF.vector, K=10) {
+  # make sure boot library is loaded
+  require(boot) 
+  cv.scores = rep(0, times = length(DF.vector))
+  for (DF in DF.vector) {
+    # get the fitted model for current value of DF
+    spline.model = glm(as.formula(formula.text), data=data)
+    # run K-fold cross validation 
+    cv = cv.glm(data=data, glmfit=spline.model, K=K)
+    # extract the cross-validation score
+    cv.scores[DF] = cv$delta[1]
+  }
+  # make the plot
+  data.out = data.frame(df = DF.vector, cv.scores = cv.scores)
+  cv.plot = ggplot(data = data.out, mapping=aes(x=df, y=cv.scores)) + geom_point() + labs(x='df', title='Cross Validation Scores')
+  # return a list containing the scores and the plot
+  return( list(scores = cv.scores, plot = cv.plot))
+}  
+```
+
+
+
+### Language over IQ
+
+Use provided function to run cross validation with 1:30 degree of freedom
+```{r fig.width=8, fig.height=5, dpi=100, fig.align='center',message=FALSE, warning=FALSE}
+glm.cv.loop(data = nlschools.grouped, formula.text = "lang ~ ns(IQ,  df=DF)",
+            DF.vector = 1:15, K = 10)
+```
+
+Choose DF = 4, plot the predictions
+```{r fig.width=8, fig.height=5, dpi=100, fig.align='center'}
+ggplot(data = nlschools.grouped, mapping=aes(x = IQ, y = lang)) +
+  geom_point(size = .5) + 
+  geom_smooth(method='lm', formula = y~ns(x, df = 4)) +
+  labs(x = 'IQ', y = 'language test score', 
+       title='Prediction of language test score over IQ')
+```
+
+As a result, based on the plot, we know, the higher IQ students have, the better they can get the language test score.
+
+### Language over GS
+
+Use provided function to run cross validation with 1:30 degree of freedom
+```{r fig.width=8, fig.height=5, dpi=100, fig.align='center'}
+glm.cv.loop(data = nlschools.grouped, formula.text = "lang ~ ns(GS,  df=DF)",
+            DF.vector = 1:15, K = 10)
+```
+
+Choose DF = 5, plot the predictions
+```{r fig.width=8, fig.height=5, dpi=100, fig.align='center'}
+ggplot(data = nlschools.grouped, mapping=aes(x = GS, y = lang)) +
+  geom_point(size = .5) + 
+  geom_smooth(method='lm', formula = y~ns(x, df = 5)) +
+  labs(x = 'GS', y = 'language test score', 
+       title='Prediction of language test score over GS')
+```
+
+Class size is not a significant variable to languange test score. However, according to the plot, we know that the best size of classes that may lead to higher language test scores are around 25 and 35.
+
+### Language over SES
+
+Use provided function to run cross validation with 1:30 degree of freedom
+```{r fig.width=8, fig.height=5, dpi=100, fig.align='center'}
+glm.cv.loop(data = nlschools.grouped, formula.text = "lang ~ ns(SES,  df=DF)",
+            DF.vector = 1:15, K = 10)
+```
+
+Choose DF = 5, plot the predictions
+```{r fig.width=8, fig.height=5, dpi=100, fig.align='center'}
+ggplot(data = nlschools.grouped, mapping=aes(x = SES, y = lang)) +
+  geom_point(size = .5) + 
+  geom_smooth(method='lm', formula = y~ns(x, df = 3)) +
+  labs(x = 'GS', y = 'language test score', 
+       title='Prediction of language test score over SES')
+```
+
+Based on the plot, social-economic status of pupil's family is another important variable to students' language test score. Higher in social-economic status of pupil's family will result in higher languange test score.
+
+### Language over COMB
+
+Quantile plot for COMB with pooled quantile
+```{r fig.width=8, fig.height=5, dpi=100, fig.align='center'}
+# Quantile Plot on IQ
+ggplot(data = nlschools.grouped, mapping = aes(sample = lang, color = COMB)) +
+  stat_qq(distribution = 'qunif') +
+  labs(x = 'Quantiles', y = 'lang test score',
+       color = 'COMB',
+       title = 'Quantile Plot, lang test score by Whether in multi-grade class')
+
+```
+Plot the QQ plot for COMB with pooled quantile
+```{r fig.width=8, fig.height=5, dpi=100, fig.align='center'}
+# QQ Plot
+# qqplot() makes QQ plot from two categories
+with(nlschools.grouped, 
+     qqplot(x = lang[ COMB == 1], y = lang[ COMB == 0], main='QQ plot, language test score by whether in multi-grade class', xlab="in multi-grade", ylab="not in multi-grade"))
+# abline() adds a reference line, with y intercept 0 and slope 1
+abline(0,1)
+```
+
+According to the Quantile plot and QQ Plot, students tend to get higher language test scores when students are not in multi-grade, especially lower quantiles. Therefore, whether or not in multi-grade class is also an important vairable to language test scores.
+
+
+
+## Do you think there are interactions in the effects of the variables on the language exam score? Speculate as to the cause of any such effects that you think should be included.
+
+Firstly, let's do forward/backward stepwise variable selection, where the scope considered is all main variables plus all possible interactions.
+```{r results="hide", fig.width=8, fig.height=5, dpi=100, fig.align='center'}
+# run linear regression of ^2 on variables.
+all.interactions = lm(lang ~ .^2, data = nlschools.grouped)
+
+# Get the forward stepwise feature selection
+interactions.forward.step  =step(lm( lang ~ 1, data = nlschools.grouped), direction = 'forward', scope = formula(all.interactions))
+
+# Get the backward stepwise feature selection
+interactions.backward.step = step(all.interactions)
+```
+
+As a result, both forward and backward generates the same result, the interaction suggestioned includes IQ and SES. Please see formula from both below.
+```{r fig.width=8, fig.height=5, dpi=100, fig.align='center'}
+# display formula of forward and backword to see if these two match
+formula(interactions.forward.step)
+formula(interactions.backward.step)
+```
+
+We will evalute this finding in plot -  how does social-economic status changes effect of IQ on language test score.
+```{r fig.width=8, fig.height=5, dpi=100, fig.align='center'}
+coplot(data = nlschools.grouped, lang ~ IQ | SES, rows=1, panel = panel.smooth, cex=.1, span=.1, lwd=3)
+```
+The shape of the plots are different across different social-economic status group, especially on the lowest and highest social-economic status group. In lowest social-economic status group, the higher IQ will result in higher language scores. Other note here is higher social-economic status group has less point around 4-8, so it may not have enough points to generate accurate plot (confident interval is high). In overall concolusion, our findings from linear interactions on IQ and social-economic status are correct.
+
+Next, We will evaluate if effect of IQ on language test score depends on the class size? We expect no interactions based on our linear model.
+```{r fig.width=8, fig.height=5, dpi=100, fig.align='center'}
+coplot(data = nlschools.grouped, lang ~ IQ | GS, rows=1, panel = panel.smooth, cex=.1, span=0.3, lwd=3)
+```
+The plot proves the same, the plot seems almost same across different class size. 
+Therefore, there are no interactions in the effect between IQ and class size on language scores.
+
+Again, We will evaluate if effect of IQ on language test score depends on the Combined class or not. 
+```{r fig.width=8, fig.height=5, dpi=100, fig.align='center'}
+coplot(data = nlschools.grouped, lang ~ IQ | COMB, rows=1, panel = panel.smooth, cex=.1, span=0.3, lwd=3)
+```
+Same result here. the plot is identical whether or not class is combined. Therefore, there are no interactions in the effect between IQ and Combined class on language scores.
+
+For class, it actually doesn't have any numeric meaning on the number. But I still like to see the effect by class group, even though higher/lower on the number doesn't really matter. 
+```{r fig.width=8, fig.height=5, dpi=100, fig.align='center'}
+coplot(data = nlschools.grouped, lang ~ IQ | class.group, rows=1, panel = panel.smooth, cex=.1, span=0.3, lwd=3)
+```
+As expected, the plot looks very identical. Therefore, there are no interactions in the effect between IQ and class on language scores.
+
+# Conclusion
+The data is clean without missing data points, but instead of using class, we are making class group to better analyze our questions.
+
+Firstly, we found discripencies on social-economic status of pupil's family and IQ across classes, also there are descepencies in IQ and social-economic status of pupil's family by whether in multi-grade class. The classes are not equally distributed on student of different IQ and social-economic status of pupil's family.
+
+Secondly, of all provided variables, IQ is a key parameter to language scores and presents that the higher IQ results in better test scores; Social-economic status is another key parameter. The higher social-economic status, the higher test scores students get ;Class size is not a significant variable to languange test score, and we know when class size is around 25 and around 35, student gets the best testing scores; Studnets that not in multi-grade tend to get higher language test scores.
+
+Lastly, IQ and social-economic status have significant interactions on the language test score. It's more obvious on the lowest and highest social-economic status group. However, higher social-economic status group has less point around 4-8, so it may not have enough points as evidence. 
+
+
+The take away is that IQ and social-economic status are impoortant to success on language test. However, there might be other variables that play key roles on language testing. Some additionl variables that might help includes: Weekly average time each students spend in study, text book they use, teachers overall evaluation, and etc. 
+
+
